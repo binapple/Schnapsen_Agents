@@ -20,8 +20,8 @@ tasks.test {
     useJUnitPlatform()
 }
 
-var agent = "Random_Agent_Schnapsen"
-var package_path = "random_agent"
+var agent = "Mcts_Agent_Schnapsen"
+var package_path = "mcts_agent"
 
 tasks.jar {
     manifest {
