@@ -106,14 +106,18 @@ public class Mcts_Agent_Schnapsen extends AbstractGameAgent<Schnapsen, Schnapsen
         if(!currentBoard.isTalonClosed())
         {
             maxDepth ++;
+            //remaining cards in pile are an option
+            maxDepth += currentBoard.playingCardsLeftInPile();
         }
         //if player was not leading it is one action less
         if(currentBoard.getLeadingCard() != null)
         {
             maxDepth --;
         }
-        //possibly 4 marriages as an action
-        maxDepth+=4;
+        //possibly 4 marriages as an action minus the ones declared already
+        int player1MarriageCount = currentBoard.getPlayer1Marriages().size()/2;
+        int player0MarriageCount = currentBoard.getPlayer0Marriages().size()/2;
+        maxDepth+=4-(player0MarriageCount+player1MarriageCount);
 
         //randomly play actions
         int simulationDepth = 0;
