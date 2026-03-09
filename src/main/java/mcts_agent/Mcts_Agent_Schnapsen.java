@@ -16,6 +16,10 @@ public class Mcts_Agent_Schnapsen extends AbstractGameAgent<Schnapsen, Schnapsen
 
     private final double MCTS_EXPLORATION = Math.sqrt(2);
 
+    //used for round end check
+    private double oldUtilityPlayer0;
+    private double oldUtilityPlayer1;
+
     public Mcts_Agent_Schnapsen(Logger log) {
         super(log);
     }
@@ -35,13 +39,21 @@ public class Mcts_Agent_Schnapsen extends AbstractGameAgent<Schnapsen, Schnapsen
             return availableActions.iterator().next();
         }
 
-        SchnapsenBoard generatedBoard = generateMissingInformation(board);
-        Schnapsen generatedSchnapsen = new Schnapsen(generatedBoard);
-
         setTimers(l,  timeUnit);
+
+        //set the utility values for end of round check in simulations
+        oldUtilityPlayer0 = schnapsen.getUtilityValue(0);
+        oldUtilityPlayer1 = schnapsen.getUtilityValue(1);
+
+        List<PlayingCard> deckOfCards = generateFullDeck(board.getTrumpCard().getSuit());
+
+        SchnapsenBoard generatedBoard = generateMissingInformation(board, deckOfCards);
+        Schnapsen generatedSchnapsen = new Schnapsen(generatedBoard);
 
         Mcts_Node_Schnapsen rootNode = new  Mcts_Node_Schnapsen(null, null, generatedSchnapsen);
 
+        //tracking iterations
+        int iteration = 0;
         //starting the MCTS Algorithm -> it will as long as possible
         while(!shouldStopComputation())
         {
@@ -49,19 +61,29 @@ public class Mcts_Agent_Schnapsen extends AbstractGameAgent<Schnapsen, Schnapsen
             Mcts_Node_Schnapsen expandedNode = expandNode(selectedNode);
             double simulationScore = simulateNode(expandedNode);
             backPropagateNode(expandedNode, simulationScore);
+            iteration++;
         }
+        log._debugf("MCTS completed %d iterations", iteration);
 
         //finding out which action was the best and returning it
+        log.debug("--- Action Statistics ---");
         SchnapsenAction bestAction = null;
+        Mcts_Node_Schnapsen bestNode = null;
         if(!rootNode.getChildNodes().isEmpty())
         {
             int visits = -1;
             for(Mcts_Node_Schnapsen child : rootNode.getChildNodes())
             {
+                double winRate = (child.getVisitations() > 0) ? (child.getScore() / child.getVisitations()) : 0.0;
+                log._debugf("Action: %-20s | Visits: %6d | WinRate: %5.2f%%",
+                        child.getParentAction().toString(),
+                        child.getVisitations(),
+                        winRate * 100.0);
                 if(child.getVisitations() > visits)
                 {
                     visits = child.getVisitations();
                     bestAction = child.getParentAction();
+                    bestNode = child;
                 }
             }
         }
@@ -70,6 +92,8 @@ public class Mcts_Agent_Schnapsen extends AbstractGameAgent<Schnapsen, Schnapsen
         {
             return availableActions.iterator().next();
         }
+        double expectedWinRate = (bestNode.getVisitations() > 0) ? (bestNode.getScore() / bestNode.getVisitations()) : 0.0;
+        log._debugf("--> CHOSEN ACTION: %s (Expected Win Rate: %.2f%%)", bestAction.toString(), expectedWinRate * 100.0);
         return bestAction;
     }
 
@@ -83,45 +107,10 @@ public class Mcts_Agent_Schnapsen extends AbstractGameAgent<Schnapsen, Schnapsen
     }
 
     private double simulateNode(Mcts_Node_Schnapsen expandedNode) {
-        //Simulation only makes sense for the current round, therefore we give maximum possible number of actions left in the round as maximum depth
-        int maxDepth = 0;
+        //randomly play actions until game or round is over
         Schnapsen currentGame = expandedNode.getGame();
-        SchnapsenBoard currentBoard = currentGame.getBoard();
-
-        //all the players cards are an action
-        if(currentGame.getCurrentPlayer() == 0)
-        {
-            maxDepth += currentBoard.getPlayer0Cards().size() *2;
-        } else
-        {
-            maxDepth += currentBoard.getPlayer1Cards().size() *2;
-        }
-
-        //exchange trump is an action
-        if(currentBoard.getOldTrumpCard()!=null)
-        {
-            maxDepth ++;
-        }
-        //close talon is an action
-        if(!currentBoard.isTalonClosed())
-        {
-            maxDepth ++;
-            //remaining cards in pile are an option
-            maxDepth += currentBoard.playingCardsLeftInPile();
-        }
-        //if player was not leading it is one action less
-        if(currentBoard.getLeadingCard() != null)
-        {
-            maxDepth --;
-        }
-        //possibly 4 marriages as an action minus the ones declared already
-        int player1MarriageCount = currentBoard.getPlayer1Marriages().size()/2;
-        int player0MarriageCount = currentBoard.getPlayer0Marriages().size()/2;
-        maxDepth+=4-(player0MarriageCount+player1MarriageCount);
-
-        //randomly play actions
         int simulationDepth = 0;
-        while(!shouldStopComputation() && !currentGame.isGameOver() && simulationDepth < maxDepth){
+        while(!shouldStopComputation() && !currentGame.isGameOver() && !isRoundOver(currentGame)) {
             Set<SchnapsenAction> possibleActions = currentGame.getPossibleActions();
             SchnapsenAction action = Util.selectRandom(possibleActions);
             currentGame = (Schnapsen) currentGame.doAction(action);
@@ -151,16 +140,33 @@ public class Mcts_Agent_Schnapsen extends AbstractGameAgent<Schnapsen, Schnapsen
                     return 0.0;
                 }
             }
-        } else
+        } else if(!this.isRoundOver(currentGame))
         {
-            double utilValue = board.getUtilityValue(playerId);
-            double maximumUtil = board.getBummerlMax()*10+9+0.99;
-            return utilValue / maximumUtil;
+            double myUtilValue = currentGame.getUtilityValue(playerId) % 1.0;
+            double theirUtilValue = currentGame.getUtilityValue(1-playerId) % 1.0;
+            double utilValue = (myUtilValue - theirUtilValue + 1.0) / 2.0;
+            return utilValue;
+        } else {
+            if (playerId == 0) {
+                long newUtilValuePlayer0 = (long) currentGame.getUtilityValue(0);
+                if (newUtilValuePlayer0 > oldUtilityPlayer0) {
+                    return 1.0;
+                } else {
+                    return 0.0;
+                }
+            } else {
+                long newUtilValuePlayer1 = (long) currentGame.getUtilityValue(1);
+                if (newUtilValuePlayer1 > oldUtilityPlayer1) {
+                    return 1.0;
+                } else {
+                    return 0.0;
+                }
+            }
         }
     }
 
     private Mcts_Node_Schnapsen expandNode(Mcts_Node_Schnapsen selectedNode) {
-            if(selectedNode.getGame().isGameOver()){
+            if(selectedNode.getGame().isGameOver() || isRoundOver(selectedNode.getGame())) {
                 return selectedNode;
             }
             if(!selectedNode.isCompletelyExpanded()) {
@@ -173,7 +179,7 @@ public class Mcts_Agent_Schnapsen extends AbstractGameAgent<Schnapsen, Schnapsen
 
     private Mcts_Node_Schnapsen selectNode(Mcts_Node_Schnapsen rootNode) {
         Mcts_Node_Schnapsen selectedNode = rootNode;
-        while (selectedNode.isCompletelyExpanded() && !selectedNode.getGame().isGameOver() && !shouldStopComputation()) {
+        while (selectedNode.isCompletelyExpanded() && !selectedNode.getGame().isGameOver() && !isRoundOver(selectedNode.getGame())&& !shouldStopComputation()) {
             boolean opponentAction = selectedNode.getGame().getCurrentPlayer()!=this.playerId;
             double bestUCT = Double.MIN_VALUE;
             for(Mcts_Node_Schnapsen child : selectedNode.getChildNodes()) {
@@ -209,8 +215,143 @@ public class Mcts_Agent_Schnapsen extends AbstractGameAgent<Schnapsen, Schnapsen
      * @param board the actual game board with hidden information
      * @return a new deep copied board with the given information and randomized cards for all unknown cards in the pile and opposing players hand
      */
-    private SchnapsenBoard generateMissingInformation(SchnapsenBoard board) {
+    private SchnapsenBoard generateMissingInformation(SchnapsenBoard board, List<PlayingCard> cachedDeck) {
+        List<PlayingCard> unknownCards = new ArrayList<>(cachedDeck);
+        //Getting the players hand and all the marriage cards declared by the other player
+        List<PlayingCard> playerCards = new ArrayList<>();
+        List<PlayingCard> marriageCards = new ArrayList<>();
+        List<PlayingCard> otherPlayersCards = new ArrayList<>();
+        if(playerId == 0)
+        {
+            playerCards = board.getPlayer0Cards();
+            marriageCards = board.getPlayer1Marriages();
+        } else {
+            playerCards = board.getPlayer1Cards();
+            marriageCards = board.getPlayer0Marriages();
+        }
 
+        //Getting the trumpCard and the leading card
+        PlayingCard trumpCard = board.getTrumpCard();
+        PlayingCard leadingCard = board.getLeadingCard();
+
+        //Checking if there was an exchange of trumps
+        PlayingCard oldTrumpCard = board.getOldTrumpCard();
+
+        //Getting already played cards
+        List<PlayingCard> trickCards = new ArrayList<>();
+        List<PlayingCard[]> player0Tricks = board.getPlayer0Tricks();
+        List<PlayingCard[]> player1Tricks = board.getPlayer1Tricks();
+
+        for(PlayingCard[] trick: player0Tricks){
+            trickCards.add(trick[0]);
+            trickCards.add(trick[1]);
+        }
+        for(PlayingCard[] trick: player1Tricks){
+            trickCards.add(trick[0]);
+            trickCards.add(trick[1]);
+        }
+
+        //Check if "exchanged" trump card has been played
+        //(if not, check if they are in the opposing players hand == not in my hand)
+        if(oldTrumpCard != null) {
+
+            boolean isLeading = (leadingCard != null && leadingCard.equals(oldTrumpCard));
+
+            if (!trickCards.contains(oldTrumpCard) && !isLeading) {
+                if (!playerCards.contains(oldTrumpCard)) {
+                    otherPlayersCards.add(oldTrumpCard);
+                }
+            }
+        }
+
+        //check if opposing player played all of their declared marriageCards
+        for(PlayingCard marriageCard: marriageCards){
+
+            boolean isLeading =  (leadingCard != null && leadingCard.equals(marriageCard));
+
+            if(!trickCards.contains(marriageCard) && !isLeading) {
+                otherPlayersCards.add(marriageCard);
+            }
+        }
+
+        //Reduce the number of unknown Cards by all findings
+
+        //Remove players cards
+
+        unknownCards.removeAll(playerCards);
+
+        //Remove trumpCard
+        unknownCards.remove(trumpCard);
+
+        //Remove leadingCard
+        if(leadingCard != null) {
+            unknownCards.remove(leadingCard);
+        }
+
+        //Remove all of otherPlayers cards
+        unknownCards.removeAll(otherPlayersCards);
+
+        //Remove already played cards
+        unknownCards.removeAll(trickCards);
+
+
+        //Fill up all the hidden card-slots with random available cards
+
+        //shuffle the unknown cards
+        Collections.shuffle(unknownCards);
+
+        int numberOfHandCards = playerCards.size();
+        int numberOfOtherPlayersHandCards = numberOfHandCards;
+        int cardsLeftInPile = board.playingCardsLeftInPile();
+
+        //other player has one Card less, because he led the trick;
+        if(leadingCard != null) {
+            numberOfOtherPlayersHandCards--;
+        }
+
+        //first fill up the playingCardPile
+        LinkedList<PlayingCard> playingCardPile = new LinkedList<>();
+
+
+        for (int i = 0; i < cardsLeftInPile-1; i++) {
+            playingCardPile.add(unknownCards.removeFirst());
+        }
+
+        // Add trumpCard as last if pile was not empty yet
+        if(cardsLeftInPile > 0) {
+            playingCardPile.addLast(trumpCard);
+        } else {
+            boolean inMyHand = playerCards.contains(trumpCard);
+            boolean inTricks = trickCards.contains(trumpCard);
+            boolean isLeading = (leadingCard != null && leadingCard.equals(trumpCard));
+            boolean alreadyAdded = otherPlayersCards.contains(trumpCard);
+
+            if(!inMyHand && !inTricks && !isLeading && !alreadyAdded) {
+                otherPlayersCards.add(trumpCard);
+            }
+        }
+
+        //the remaining cards should fit into the opponents hand
+        if((otherPlayersCards.size() + unknownCards.size()) != numberOfOtherPlayersHandCards) {
+            throw new IllegalStateException("Calculated wrong: Opponent has " +
+                    (otherPlayersCards.size() + unknownCards.size()) +
+                    " but should have " + numberOfOtherPlayersHandCards);
+        } else {
+            otherPlayersCards.addAll(unknownCards);
+        }
+
+        //create a board based on the findings and randomly assumed cards
+        SchnapsenBoard filledBoard;
+        if(playerId == 0) {
+            filledBoard = new SchnapsenBoard(board, playerCards, otherPlayersCards, playingCardPile);
+        } else {
+            filledBoard = new SchnapsenBoard(board, otherPlayersCards, playerCards, playingCardPile);
+        }
+
+        return filledBoard;
+    }
+
+    private List<PlayingCard> generateFullDeck(SchnapsenBoard.cardSuits trumpSuit) {
         //creating and filling a list with of all not known cards
         LinkedList<PlayingCard> unknownCards = new LinkedList<>();
 
@@ -258,192 +399,26 @@ public class Mcts_Agent_Schnapsen extends AbstractGameAgent<Schnapsen, Schnapsen
         unknownCards.add(new PlayingCard(SchnapsenBoard.cardSuits.CLUBS, SchnapsenBoard.cardNames.TenOfClubs, 10));
         unknownCards.add(new PlayingCard(SchnapsenBoard.cardSuits.CLUBS, SchnapsenBoard.cardNames.AceOfClubs, 11));
 
-        //Getting the players hand and all the marriage cards declared by the other player
-        List<PlayingCard> playerCards = new ArrayList<>();
-        List<PlayingCard> marriageCards = new ArrayList<>();
-        List<PlayingCard> otherPlayersCards = new ArrayList<>();
-        if(playerId == 0)
-        {
-            playerCards = board.getPlayer0Cards();
-            marriageCards = board.getPlayer1Marriages();
-        } else {
-            playerCards = board.getPlayer1Cards();
-            marriageCards = board.getPlayer0Marriages();
-        }
-
-        //Getting the trumpCard and the leading card
-        PlayingCard trumpCard = board.getTrumpCard();
-        PlayingCard leadingCard = board.getLeadingCard();
-
-        //set the isTrump() field on newly created cards
-        SchnapsenBoard.cardSuits trumpSuit = trumpCard.getSuit();
-        for (PlayingCard card : unknownCards) {
-            if( trumpSuit == card.getSuit()) {
+        for(PlayingCard card :  unknownCards){
+            if(trumpSuit == card.getSuit()){
                 card.setIsTrumpSuit(true);
             }
         }
-
-        //Checking if there was an exchange of trumps
-        PlayingCard oldTrumpCard = board.getOldTrumpCard();
-
-        //Getting already played cards
-        List<PlayingCard> trickCards = new ArrayList<>();
-        List<PlayingCard[]> player0Tricks = board.getPlayer0Tricks();
-        List<PlayingCard[]> player1Tricks = board.getPlayer1Tricks();
-
-        for(PlayingCard[] trick: player0Tricks){
-            trickCards.add(trick[0]);
-            trickCards.add(trick[1]);
-        }
-        for(PlayingCard[] trick: player1Tricks){
-            trickCards.add(trick[0]);
-            trickCards.add(trick[1]);
-        }
-
-        //Check if "exchanged" trump card has been played
-        // (if not, check if they are in the opposing players hand == not in my hand)
-        if(oldTrumpCard != null) {
-
-            boolean isLeading = (leadingCard != null && leadingCard.equals(oldTrumpCard));
-
-            if (!trickCards.contains(oldTrumpCard) && !isLeading) {
-                if (!playerCards.contains(oldTrumpCard)) {
-                    otherPlayersCards.add(oldTrumpCard);
-                }
-            }
-        }
-
-        //check if opposing player played all of their declared marriageCards
-        for(PlayingCard marriageCard: marriageCards){
-
-            boolean isLeading =  (leadingCard != null && leadingCard.equals(marriageCard));
-
-            if(!trickCards.contains(marriageCard) && !isLeading) {
-                otherPlayersCards.add(marriageCard);
-            }
-        }
-
-
-
-        //Reduce the number of unknown Cards by all findings
-
-        //Remove players cards
-        for(PlayingCard playerCard: playerCards) {
-            PlayingCard foundCard = findCardInPile(unknownCards, playerCard);
-            unknownCards.remove(foundCard);
-        }
-
-        //Remove trumpCard
-        PlayingCard foundTrumpCard = findCardInPile(unknownCards, trumpCard);
-        unknownCards.remove(foundTrumpCard);
-
-        //Remove leadingCard
-        if(leadingCard != null) {
-            PlayingCard foundLeadingCard = findCardInPile(unknownCards, leadingCard);
-            unknownCards.remove(foundLeadingCard);
-        }
-
-        //Remove all of otherPlayers cards
-        for(PlayingCard otherPlayerCard: otherPlayersCards){
-            PlayingCard foundCard = findCardInPile(unknownCards, otherPlayerCard);
-            unknownCards.remove(foundCard);
-        }
-
-        //Remove already played cards
-        for(PlayingCard playedCard: trickCards) {
-            PlayingCard foundCard = findCardInPile(unknownCards, playedCard);
-            unknownCards.remove(foundCard);
-        }
-
-
-        //Fill up all the hidden card-slots with random available cards
-
-        //shuffle the unkown cards
-        Collections.shuffle(unknownCards);
-
-        int numberOfHandCards = playerCards.size();
-        int numberOfOtherPlayersHandCards = numberOfHandCards;
-        int cardsLeftInPile = board.playingCardsLeftInPile();
-
-        //other player has one Card less, because he led the trick;
-        if(leadingCard != null) {
-            numberOfOtherPlayersHandCards--;
-        }
-
-
-        //first fill up the playingCardPile
-        LinkedList<PlayingCard> playingCardPile = new LinkedList<>();
-
-
-        for (int i = 0; i < cardsLeftInPile-1; i++) {
-            playingCardPile.add(unknownCards.pop());
-        }
-
-        /*//add trumpCard as last if pile was not empty yet
-        if(cardsLeftInPile > 0) {
-            playingCardPile.addLast(trumpCard);
-        } else {
-            //add trump card to opponent hand if pile is empty, it is not in our hand and when it has not been played yet
-            if(!playerCards.contains(trumpCard)) {
-                if(!trickCards.contains(trumpCard)) {
-                    if(leadingCard == null) {
-                        otherPlayersCards.add(trumpCard);
-                    }
-                }
-            }
-        }*/
-
-        // Add trumpCard as last if pile was not empty yet
-        if(cardsLeftInPile > 0) {
-            playingCardPile.addLast(trumpCard);
-        } else {
-
-            // 1. Check if we (the agent) hold it
-            boolean inMyHand = playerCards.contains(trumpCard);
-
-            // 2. Check if it was played in a previous trick
-            boolean inTricks = trickCards.contains(trumpCard);
-
-            // 3. Check if it is currently on the table (Leading Card)
-            // (Use .equals to be safe!)
-            boolean isLeading = (leadingCard != null && leadingCard.equals(trumpCard));
-
-            // 4. CRITICAL: Check if we already added it to opponent's hand
-            // (e.g., via the "Old Trump" exchange logic earlier)
-            boolean alreadyAdded = otherPlayersCards.contains(trumpCard);
-
-            if(!inMyHand && !inTricks && !isLeading && !alreadyAdded) {
-                otherPlayersCards.add(trumpCard);
-            }
-        }
-
-
-        //the remaining cards should fit into the opponents hand
-        if((otherPlayersCards.size() + unknownCards.size()) != numberOfOtherPlayersHandCards) {
-            throw new IllegalStateException("Calculated wrong: Opponent has " +
-                    (otherPlayersCards.size() + unknownCards.size()) +
-                    " but should have " + numberOfOtherPlayersHandCards);
-        } else {
-            otherPlayersCards.addAll(unknownCards);
-        }
-
-        //create a board based on the findings and randomly assumed cards
-        SchnapsenBoard filledBoard;
-        if(playerId == 0) {
-            filledBoard = new SchnapsenBoard(board, playerCards, otherPlayersCards, playingCardPile);
-        } else {
-            filledBoard = new SchnapsenBoard(board, otherPlayersCards, playerCards, playingCardPile);
-        }
-
-        return filledBoard;
-    }
-
-    private PlayingCard findCardInPile(List<PlayingCard> pile, PlayingCard targetCard){
-        if(targetCard.getCardName() == SchnapsenBoard.cardNames.PlaceHolder) {
-            return new PlayingCard(SchnapsenBoard.cardSuits.SPADES, SchnapsenBoard.cardNames.PlaceHolder,0);
-        }
-        return pile.stream().filter(p -> p.equals(targetCard)).findFirst().orElse(null);
+        return unknownCards;
     }
 
 
+    private boolean isRoundOver(Schnapsen schnapsen){
+        long oldBummerlValuePlayer0 = (long) oldUtilityPlayer0;
+        long oldBummerlValuePlayer1 = (long) oldUtilityPlayer1;
+        long newBummerlValuePlayer0 = (long) schnapsen.getUtilityValue(0);
+        long newBummerlValuePlayer1 =  (long) schnapsen.getUtilityValue(1);
+
+        if(oldBummerlValuePlayer0 != newBummerlValuePlayer0 || oldBummerlValuePlayer1 != newBummerlValuePlayer1)
+        {
+            return true;
+        }
+
+        return false;
+    }
 }
