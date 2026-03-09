@@ -56,18 +56,45 @@ public class Is_Mcts_Agent_Schnapsen extends AbstractGameAgent<Schnapsen, Schnap
             //if it was not the first round we re-use the tree but have to change the root
             SchnapsenAction lastAction = schnapsen.getPreviousAction();
             if(lastAction  != null) {
-                Is_Mcts_Node_Schnapsen nextRootNode = this.currentRootNode.findChildWithAction(lastAction);
-                if(nextRootNode != null){
-                    log._debugf("Reusing tree! Found opponent action: %s. Starting with %d prior visits.",
-                            lastAction.toString(), nextRootNode.getVisitations());
-                    this.currentRootNode = nextRootNode;
-                    this.currentRootNode.setParentNode(null); // Cut off the parent (this is our new root)
+
+                //to re-use the tree when we have repeat turns (marriage or closing talon) or won a trick after not leading we do not have to change the root
+                //as we should be on the correct one allready
+                boolean isAgainOurTurn = this.currentRootNode.getParentAction() != null && this.currentRootNode.getParentAction().equals(lastAction);
+
+                if(isAgainOurTurn)
+                {
+                    log._debugf("Repeated turn detected. Root is already correct!");
                 } else {
-                    //if the action has not yet been simulated in the tree we start with an empty tree
-                    log._debugf("Tree reuse failed. Opponent action '%s' was never simulated. Starting fresh.", lastAction.toString());
-                    this.currentRootNode = new Is_Mcts_Node_Schnapsen(null, null);
+                    Is_Mcts_Node_Schnapsen nextRootNode = this.currentRootNode.findChildWithAction(lastAction);
+                    if (nextRootNode != null) {
+                        log._debugf("Reusing tree! Found opponent action: %s. Starting with %d prior visits.",
+                                lastAction.toString(), nextRootNode.getVisitations());
+                        this.currentRootNode = nextRootNode;
+                        this.currentRootNode.setParentNode(null); // Cut off the parent (this is our new root)
+                    } else {
+                        //if the action has not yet been simulated in the tree we start with an empty tree
+                        log._debugf("Tree reuse failed. Opponent action '%s' was never simulated. Starting fresh.", lastAction.toString());
+                        this.currentRootNode = new Is_Mcts_Node_Schnapsen(null, null);
+                    }
                 }
             }
+        }
+
+        //we can prune actions that are now not available with the updated board states
+        int prunedActions = 0;
+
+        Iterator<Is_Mcts_Node_Schnapsen> iterator = this.currentRootNode.getChildNodes().iterator();
+
+        while(iterator.hasNext()) {
+            Is_Mcts_Node_Schnapsen currentChildNode = iterator.next();
+            if(!availableActions.contains(currentChildNode.getParentAction())) {
+                iterator.remove();
+                prunedActions++;
+            }
+        }
+
+        if(prunedActions > 0) {
+            log._debugf("Filtering the root node: Pruned %d actions from re-used tree.", prunedActions);
         }
 
         List<PlayingCard> deckOfCards = generateFullDeck(board.getTrumpCard().getSuit());
