@@ -26,8 +26,12 @@ tasks.test {
 //var agent = "Mcts_Agent_Schnapsen"
 //var package_path = "mcts_agent"
 
-var agent = "Alpha_Beta_Agent_Schnapsen"
-var package_path = "alpha_beta_agent"
+//var agent = "Alpha_Beta_Agent_Schnapsen"
+//var package_path = "alpha_beta_agent"
+
+var agent = "Is_Mcts_Agent_Schnapsen"
+var package_path = "is_mcts_agent"
+
 
 tasks.jar {
     manifest {
