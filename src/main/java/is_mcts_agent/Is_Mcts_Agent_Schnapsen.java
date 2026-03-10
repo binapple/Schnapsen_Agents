@@ -385,7 +385,7 @@ public class Is_Mcts_Agent_Schnapsen extends AbstractGameAgent<Schnapsen, Schnap
 
             boolean isLeading =  (leadingCard != null && leadingCard.equals(marriageCard));
 
-            if(!trickCards.contains(marriageCard) && !isLeading) {
+            if(!trickCards.contains(marriageCard) && !isLeading && !otherPlayersCards.contains(marriageCard)) {
                 otherPlayersCards.add(marriageCard);
             }
         }
