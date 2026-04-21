@@ -14,20 +14,36 @@ import java.util.concurrent.TimeUnit;
 
 public class Mcts_Agent_Schnapsen extends AbstractGameAgent<Schnapsen, SchnapsenAction> implements GameAgent<Schnapsen, SchnapsenAction> {
 
+    //This constant is used for the UCT formula
     private final double MCTS_EXPLORATION = Math.sqrt(2);
 
-    //used for round end check
+    //These variables are used for the round end check
     private double oldUtilityPlayer0;
     private double oldUtilityPlayer1;
 
+    /**
+     * Constructor for the Strategy Game Engine
+     * @param log a logger object passed by the engine
+     */
     public Mcts_Agent_Schnapsen(Logger log) {
         super(log);
     }
 
+    /**
+     * Constructor for testing without a logger object
+     */
     public Mcts_Agent_Schnapsen() {
         super();
     }
 
+    /**
+     * This method will be called by the engine everytime the agent has its turn.
+     * In this method the agent looks at one possible determinization and runs an MCTS algorithm on it
+     * @param schnapsen the games state as given by the engine (may include hidden information)
+     * @param l the maximum available time the agent is allowed to take to think about its next action
+     * @param timeUnit the unit in which the l parameter is measured
+     * @return a  SchnapsenAction chosen from the agents available ones after determinizing the imperfect information once and running a UCT algorithm
+     */
     @Override
     public SchnapsenAction computeNextAction(Schnapsen schnapsen, long l, TimeUnit timeUnit) {
 
@@ -39,22 +55,27 @@ public class Mcts_Agent_Schnapsen extends AbstractGameAgent<Schnapsen, Schnapsen
             return availableActions.iterator().next();
         }
 
+        //This method is provided by the AbstractGame interface and used to track remaining computation time with shouldStopComputation()
         setTimers(l,  timeUnit);
 
         //set the utility values for end of round check in simulations
         oldUtilityPlayer0 = schnapsen.getUtilityValue(0);
         oldUtilityPlayer1 = schnapsen.getUtilityValue(1);
 
+        //This list is a one time generation of the cards in the game, setting the boolean on trump card to true if suit matches
         List<PlayingCard> deckOfCards = generateFullDeck(board.getTrumpCard().getSuit());
 
+        //This board is a new board based on the newly generated Information, which does not include any more hidden Information and is therefore playable
         SchnapsenBoard generatedBoard = generateMissingInformation(board, deckOfCards);
+        //We also need to generate a new Schnapsen object with the new board
         Schnapsen generatedSchnapsen = new Schnapsen(generatedBoard);
 
+        //The root node used to track the tree
         Mcts_Node_Schnapsen rootNode = new  Mcts_Node_Schnapsen(null, null, generatedSchnapsen);
 
-        //tracking iterations
+        //used for tracking iterations
         int iteration = 0;
-        //starting the MCTS Algorithm -> it will as long as possible
+        //starting the MCTS Algorithm -> it will run as long as possible (given the time constraint)
         while(!shouldStopComputation())
         {
             Mcts_Node_Schnapsen selectedNode = selectNode(rootNode);
@@ -65,7 +86,8 @@ public class Mcts_Agent_Schnapsen extends AbstractGameAgent<Schnapsen, Schnapsen
         }
         log._debugf("MCTS completed %d iterations", iteration);
 
-        //finding out which action was the best and returning it
+        //finding out which action was the best and returning it, based on the most robust child:
+        //The child with the most visits
         log.debug("--- Action Statistics ---");
         SchnapsenAction bestAction = null;
         Mcts_Node_Schnapsen bestNode = null;
@@ -88,6 +110,7 @@ public class Mcts_Agent_Schnapsen extends AbstractGameAgent<Schnapsen, Schnapsen
             }
         }
 
+        //Fallback if the time was too short to pick an action by MCTS -> just pick the first available action
         if(bestAction == null)
         {
             return availableActions.iterator().next();
@@ -97,31 +120,46 @@ public class Mcts_Agent_Schnapsen extends AbstractGameAgent<Schnapsen, Schnapsen
         return bestAction;
     }
 
+    /**
+     * This method uses the score of the simulation and adds it to the nodes score. The visitation counter is also incremented.
+     * This is repeated for all the nodes parents to update all involved nodes accordingly
+     * @param expandedNode the node which was last expanded and received the simulationScore
+     * @param simulationScore the score of the playout simulation for this node
+     */
     private void backPropagateNode(Mcts_Node_Schnapsen expandedNode, double simulationScore) {
         Mcts_Node_Schnapsen propagationNode = expandedNode;
         while (propagationNode != null) {
-            propagationNode.incrementVisistations();
+            propagationNode.incrementVisitations();
             propagationNode.addScore(simulationScore);
             propagationNode = propagationNode.getParentNode();
         }
     }
 
+    /**
+     * This method uses the expandedNode to simulate a complete playthrough till the end of the current round, end of game or the end of calculation time budget
+     * @param expandedNode the last expanded node
+     * @return a score in the range of 0 and 1, where 1 is a win and 0 is a loss. In between scores represent the score difference to the opposing player in an ongoing round
+     */
     private double simulateNode(Mcts_Node_Schnapsen expandedNode) {
         //randomly play actions until game or round is over
         Schnapsen currentGame = expandedNode.getGame();
-        int simulationDepth = 0;
         while(!shouldStopComputation() && !currentGame.isGameOver() && !isRoundOver(currentGame)) {
             Set<SchnapsenAction> possibleActions = currentGame.getPossibleActions();
             SchnapsenAction action = Util.selectRandom(possibleActions);
             currentGame = (Schnapsen) currentGame.doAction(action);
-            simulationDepth++;
         }
 
         return simulationScore(currentGame);
     }
 
+    /**
+     * This method calculates a score in the range of 0.0 and 1.0 to represent the winning state of the agents player
+     * @param currentGame The Schnapsen games state that needs calculation
+     * @return a score representing either a win (1.0) or a loss (0.0). If the round is not over the score is based on the difference in the current round score of the players
+     */
     private double simulationScore(Schnapsen currentGame) {
         SchnapsenBoard board = currentGame.getBoard();
+        //If game is over we just have to check if our agents player has won, therefore not reached the maximum Bummerl points
         if(currentGame.isGameOver()){
             if(playerId == 0)
             {
@@ -142,11 +180,13 @@ public class Mcts_Agent_Schnapsen extends AbstractGameAgent<Schnapsen, Schnapsen
             }
         } else if(!this.isRoundOver(currentGame))
         {
+            //Special case where we look at the difference in scores in the ongoing round
             double myUtilValue = currentGame.getUtilityValue(playerId) % 1.0;
             double theirUtilValue = currentGame.getUtilityValue(1-playerId) % 1.0;
             double utilValue = (myUtilValue - theirUtilValue + 1.0) / 2.0;
             return utilValue;
         } else {
+            //Here we check who won the last round
             if (playerId == 0) {
                 long newUtilValuePlayer0 = (long) currentGame.getUtilityValue(0);
                 if (newUtilValuePlayer0 > oldUtilityPlayer0) {
@@ -165,6 +205,11 @@ public class Mcts_Agent_Schnapsen extends AbstractGameAgent<Schnapsen, Schnapsen
         }
     }
 
+    /**
+     * This method expands a node and returns one of its untried children if there are any
+     * @param selectedNode the node which was selected by the UCT algorithm
+     * @return a newly expanded child node if expansion happened, or the node itself if otherwise
+     */
     private Mcts_Node_Schnapsen expandNode(Mcts_Node_Schnapsen selectedNode) {
             if(selectedNode.getGame().isGameOver() || isRoundOver(selectedNode.getGame())) {
                 return selectedNode;
@@ -177,6 +222,14 @@ public class Mcts_Agent_Schnapsen extends AbstractGameAgent<Schnapsen, Schnapsen
             }
     }
 
+    /**
+     * This method implements the selection process. Starting from the root node we check each of the children based on the UCT formula
+     * and select the best one. This is repeated till we find a leaf node (where game or round ends) or reaching an unexpanded node.
+     * <p>
+     * When reaching an unexpanded node (not all children have been tried yet) or reaching end of round/end of game/end of computation time we stop the selection.
+     * @param rootNode the node where our search tree starts
+     * @return a node which has unexpanded children or a leaf node, or a node that could not be entirely checked because of time constraints
+     */
     private Mcts_Node_Schnapsen selectNode(Mcts_Node_Schnapsen rootNode) {
         Mcts_Node_Schnapsen selectedNode = rootNode;
         while (selectedNode.isCompletelyExpanded() && !selectedNode.getGame().isGameOver() && !isRoundOver(selectedNode.getGame())&& !shouldStopComputation()) {
@@ -193,18 +246,30 @@ public class Mcts_Agent_Schnapsen extends AbstractGameAgent<Schnapsen, Schnapsen
         return selectedNode;
     }
 
+    /**
+     * Here we use the UCT formula to steer our selection process. We expect our opponent to choose the action that is worst for us
+     * @param child a child node of a fully expanded node
+     * @param parent the parent node from which we want to select the best fitting child based on our formula
+     * @param opponentAction a boolean that states if the action is from the enemy player
+     * @return a score based on the UCT formula for the current child
+     */
     private double getUCT(Mcts_Node_Schnapsen child, Mcts_Node_Schnapsen parent, boolean opponentAction) {
         //unvisited children should be prioritized
         if(child.getVisitations() < 1)
         {
             return Double.POSITIVE_INFINITY;
         }
+
+        //This is the exploitation part of the UCT formula -> the better this part the more often it will be chosen
         double exploitationPart = child.getScore() / child.getVisitations();
 
+        //To calculate opponent actions we calculate a score inverted.
+        //The better the score would be for us, the worse it is for selection purposes, if it is the enemy's turn
         if(opponentAction) {
             exploitationPart = 1.0 - exploitationPart;
         }
 
+        //This part helps the tree to not be too focused on winning branches and explore different scenarios. With more simulations this part gets less significance
         double explorationPart = MCTS_EXPLORATION * Math.sqrt(Math.log(parent.getVisitations()) / (child.getVisitations()));
 
         return  exploitationPart + explorationPart;
@@ -242,6 +307,7 @@ public class Mcts_Agent_Schnapsen extends AbstractGameAgent<Schnapsen, Schnapsen
         List<PlayingCard[]> player0Tricks = board.getPlayer0Tricks();
         List<PlayingCard[]> player1Tricks = board.getPlayer1Tricks();
 
+        //Getting both players cards that have been taken in a past trick
         for(PlayingCard[] trick: player0Tricks){
             trickCards.add(trick[0]);
             trickCards.add(trick[1]);
@@ -304,7 +370,7 @@ public class Mcts_Agent_Schnapsen extends AbstractGameAgent<Schnapsen, Schnapsen
         int numberOfOtherPlayersHandCards = numberOfHandCards;
         int cardsLeftInPile = board.playingCardsLeftInPile();
 
-        //other player has one Card less, because he led the trick;
+        //other player has one Card less, because they led the trick
         if(leadingCard != null) {
             numberOfOtherPlayersHandCards--;
         }
@@ -351,63 +417,75 @@ public class Mcts_Agent_Schnapsen extends AbstractGameAgent<Schnapsen, Schnapsen
         return filledBoard;
     }
 
+    /**
+     * This method is used to generate a full deck. The trump suit is used to set the trump status for cards with matching suits
+     * @param trumpSuit the trump suit of the current round
+     * @return a complete deck of cards with correctly set cards of trump status
+     */
     private List<PlayingCard> generateFullDeck(SchnapsenBoard.cardSuits trumpSuit) {
         //creating and filling a list with of all not known cards
-        LinkedList<PlayingCard> unknownCards = new LinkedList<>();
+        LinkedList<PlayingCard> deckOfCards = new LinkedList<>();
 
-        unknownCards.add(new PlayingCard(SchnapsenBoard.cardSuits.SPADES, SchnapsenBoard.cardNames.JackOfSpades, 2));
+        deckOfCards.add(new PlayingCard(SchnapsenBoard.cardSuits.SPADES, SchnapsenBoard.cardNames.JackOfSpades, 2));
         //Adding possible marriages to the spades cards
         PlayingCard queenSpades = new PlayingCard(SchnapsenBoard.cardSuits.SPADES, SchnapsenBoard.cardNames.QueenOfSpades, 3);
         PlayingCard kingSpades = new PlayingCard(SchnapsenBoard.cardSuits.SPADES, SchnapsenBoard.cardNames.KingOfSpades, 4);
         queenSpades.setPossibleMarriage(kingSpades);
         kingSpades.setPossibleMarriage(queenSpades);
-        unknownCards.add(queenSpades);
-        unknownCards.add(kingSpades);
-        unknownCards.add(new PlayingCard(SchnapsenBoard.cardSuits.SPADES, SchnapsenBoard.cardNames.TenOfSpades, 10));
-        unknownCards.add(new PlayingCard(SchnapsenBoard.cardSuits.SPADES, SchnapsenBoard.cardNames.AceOfSpades, 11));
+        deckOfCards.add(queenSpades);
+        deckOfCards.add(kingSpades);
+        deckOfCards.add(new PlayingCard(SchnapsenBoard.cardSuits.SPADES, SchnapsenBoard.cardNames.TenOfSpades, 10));
+        deckOfCards.add(new PlayingCard(SchnapsenBoard.cardSuits.SPADES, SchnapsenBoard.cardNames.AceOfSpades, 11));
 
-        unknownCards.add(new PlayingCard(SchnapsenBoard.cardSuits.HEARTS, SchnapsenBoard.cardNames.JackOfHearts, 2));
+        deckOfCards.add(new PlayingCard(SchnapsenBoard.cardSuits.HEARTS, SchnapsenBoard.cardNames.JackOfHearts, 2));
         //Adding possible marriages to the hearts cards
         PlayingCard queenHearts = new PlayingCard(SchnapsenBoard.cardSuits.HEARTS, SchnapsenBoard.cardNames.QueenOfHearts, 3);
         PlayingCard kingHearts = new PlayingCard(SchnapsenBoard.cardSuits.HEARTS, SchnapsenBoard.cardNames.KingOfHearts, 4);
         queenHearts.setPossibleMarriage(kingHearts);
         kingHearts.setPossibleMarriage(queenHearts);
-        unknownCards.add(queenHearts);
-        unknownCards.add(kingHearts);
-        unknownCards.add(new PlayingCard(SchnapsenBoard.cardSuits.HEARTS, SchnapsenBoard.cardNames.TenOfHearts, 10));
-        unknownCards.add(new PlayingCard(SchnapsenBoard.cardSuits.HEARTS, SchnapsenBoard.cardNames.AceOfHearts, 11));
+        deckOfCards.add(queenHearts);
+        deckOfCards.add(kingHearts);
+        deckOfCards.add(new PlayingCard(SchnapsenBoard.cardSuits.HEARTS, SchnapsenBoard.cardNames.TenOfHearts, 10));
+        deckOfCards.add(new PlayingCard(SchnapsenBoard.cardSuits.HEARTS, SchnapsenBoard.cardNames.AceOfHearts, 11));
 
-        unknownCards.add(new PlayingCard(SchnapsenBoard.cardSuits.DIAMONDS, SchnapsenBoard.cardNames.JackOfDiamonds, 2));
+        deckOfCards.add(new PlayingCard(SchnapsenBoard.cardSuits.DIAMONDS, SchnapsenBoard.cardNames.JackOfDiamonds, 2));
         //Adding possible marriages to the hearts cards
         PlayingCard queenDiamonds = new PlayingCard(SchnapsenBoard.cardSuits.DIAMONDS, SchnapsenBoard.cardNames.QueenOfDiamonds, 3);
         PlayingCard kingDiamonds = new PlayingCard(SchnapsenBoard.cardSuits.DIAMONDS, SchnapsenBoard.cardNames.KingOfDiamonds, 4);
         queenDiamonds.setPossibleMarriage(kingDiamonds);
         kingDiamonds.setPossibleMarriage(queenDiamonds);
-        unknownCards.add(queenDiamonds);
-        unknownCards.add(kingDiamonds);
-        unknownCards.add(new PlayingCard(SchnapsenBoard.cardSuits.DIAMONDS, SchnapsenBoard.cardNames.TenOfDiamonds, 10));
-        unknownCards.add(new PlayingCard(SchnapsenBoard.cardSuits.DIAMONDS, SchnapsenBoard.cardNames.AceOfDiamonds, 11));
+        deckOfCards.add(queenDiamonds);
+        deckOfCards.add(kingDiamonds);
+        deckOfCards.add(new PlayingCard(SchnapsenBoard.cardSuits.DIAMONDS, SchnapsenBoard.cardNames.TenOfDiamonds, 10));
+        deckOfCards.add(new PlayingCard(SchnapsenBoard.cardSuits.DIAMONDS, SchnapsenBoard.cardNames.AceOfDiamonds, 11));
 
-        unknownCards.add(new PlayingCard(SchnapsenBoard.cardSuits.CLUBS, SchnapsenBoard.cardNames.JackOfClubs, 2));
+        deckOfCards.add(new PlayingCard(SchnapsenBoard.cardSuits.CLUBS, SchnapsenBoard.cardNames.JackOfClubs, 2));
         //Adding possible marriages to the hearts cards
         PlayingCard queenClubs = new PlayingCard(SchnapsenBoard.cardSuits.CLUBS, SchnapsenBoard.cardNames.QueenOfClubs, 3);
         PlayingCard kingClubs = new PlayingCard(SchnapsenBoard.cardSuits.CLUBS, SchnapsenBoard.cardNames.KingOfClubs, 4);
         queenClubs.setPossibleMarriage(kingClubs);
         kingClubs.setPossibleMarriage(queenClubs);
-        unknownCards.add(queenClubs);
-        unknownCards.add(kingClubs);
-        unknownCards.add(new PlayingCard(SchnapsenBoard.cardSuits.CLUBS, SchnapsenBoard.cardNames.TenOfClubs, 10));
-        unknownCards.add(new PlayingCard(SchnapsenBoard.cardSuits.CLUBS, SchnapsenBoard.cardNames.AceOfClubs, 11));
+        deckOfCards.add(queenClubs);
+        deckOfCards.add(kingClubs);
+        deckOfCards.add(new PlayingCard(SchnapsenBoard.cardSuits.CLUBS, SchnapsenBoard.cardNames.TenOfClubs, 10));
+        deckOfCards.add(new PlayingCard(SchnapsenBoard.cardSuits.CLUBS, SchnapsenBoard.cardNames.AceOfClubs, 11));
 
-        for(PlayingCard card :  unknownCards){
+        for(PlayingCard card :  deckOfCards){
             if(trumpSuit == card.getSuit()){
                 card.setIsTrumpSuit(true);
             }
         }
-        return unknownCards;
+        return deckOfCards;
     }
 
-
+    /**
+     * This check is used to find out if since the last action taken a new round has started on the board.
+     * This is used to not simulate into new rounds as the new round shuffles new cards,
+     * but the random object of an agents view is not synchronised with the actual boards random object.
+     * Therefore, it is meaningless to simulate into upcoming rounds.
+     * @param schnapsen the games state that is compared to the state of the game passed by the engine
+     * @return a boolean that states if the games has started into a different round than the one passed by the engine
+     */
     private boolean isRoundOver(Schnapsen schnapsen){
         long oldBummerlValuePlayer0 = (long) oldUtilityPlayer0;
         long oldBummerlValuePlayer1 = (long) oldUtilityPlayer1;

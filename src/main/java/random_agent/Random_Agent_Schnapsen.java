@@ -12,6 +12,10 @@ import java.util.concurrent.TimeUnit;
 
 public class Random_Agent_Schnapsen extends AbstractGameAgent<Schnapsen, SchnapsenAction> implements GameAgent<Schnapsen, SchnapsenAction> {
 
+    /**
+     * Constructor for the Strategy Game Engine
+     * @param log a logger object passed by the engine
+     */
     public Random_Agent_Schnapsen(Logger log) {
         super(log);
     }
